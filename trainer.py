@@ -116,7 +116,7 @@ class CustomTrainer:
         predictions = []
         targets = []
         gradient_magn = 0
-        procesed_micro_batches = 0
+        processed_micro_batches = 0
         for k in range(0, len(target), micro_batch_size):
             i = input[k: k + micro_batch_size]
             t = target[k: k + micro_batch_size]
@@ -128,7 +128,7 @@ class CustomTrainer:
             )
             if res is None:
                 continue
-            procesed_micro_batches += 1
+            processed_micro_batches += 1
             if return_pred_target:  # TODO IT'S ONLY FOR EVAL
                 g, p, t = res
                 gradients_magn.append(g.item())
@@ -139,24 +139,21 @@ class CustomTrainer:
                 res.backward()
                 gradient_magn += res.item()
 
-        if procesed_micro_batches == 0:
+        if processed_micro_batches == 0:
             return None
         if gradient_magn != 0:
-            return gradient_magn, procesed_micro_batches
+            return gradient_magn, processed_micro_batches
         else:
-            return gradients_magn, predictions, targets, procesed_micro_batches
+            return gradients_magn, predictions, targets, processed_micro_batches
 
     def train(
             self,
             model,
-            train_idx=None,
-            eval_idx=None,
-            ds_class=None,
             train_ds=None,
             eval_ds=None,
             epochs: int = None,
             steps: int = None,
-            # if steps are provided, than eval on each eval_freqth step, if epochs are provided eval on each (float part of epoch (e.g. each 0.3 epoch))
+            # if steps are provided, then eval on each eval_freqth step, if epochs are provided eval on each (float part of epoch (e.g. each 0.3 epoch))
             eval_freq: float = None,
             # number of batches to process beefore updating
             optim_freq: int = 1,

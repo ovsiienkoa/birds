@@ -12,6 +12,7 @@ import pandas as pd
 from torch.utils.data import Sampler
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 @dataclass
 class AudioConfig:
     """
@@ -33,11 +34,12 @@ class AudioConfig:
 
     prior_cut_sec: int = 5
 
+
 class BirdDataset(torch.utils.data.Dataset):
     def __init__(
             self,
-            meta_df,
             label_encoder,
+            meta_df: pd.DataFrame,
             config: AudioConfig,
             group_mode: bool = True,
             return_id: bool = True,
@@ -45,31 +47,40 @@ class BirdDataset(torch.utils.data.Dataset):
             root_dir: str = '/kaggle/input/birdclef-2025/train_audio',
             multitarget: bool = True,
     ):
+        """
+        Stores waves and ohe labels (possible storage of predictions)
+
+        Args:
+            label_encoder: encoder text -> id & id -> text, should implement .fit .transform methods
+            meta_df: dataframe with audio file path / primary label / secondary label
+            config: audio processing config
+            group_mode: flag to create targets file wise or chunk wise
+            return_id: flag to return file path with waves and targets
+            prediction_as_target: flag to return precalculated predictions instead of true targets,
+            root_dir: audio files directory,
+            multitarget: flag to include secondary labels into targets,
+        """
         super().__init__()
-        self.cfg = config
         # sklearn labelencoder
         self.label_encoder = label_encoder
-        # files root dir
+
+        self.cfg = config
         self.root_dir = root_dir
-        # flag to retrieve whole sequnces instead of just tokens
         self.group_mode = group_mode
-        # flag to retrieve filenames to sequence of tensors
         self.return_id = return_id
-        # includes the secondary labels as primary
         self.multitarget = multitarget
-        # flag to retrive pseudo labels
         self.prediction_as_target = prediction_as_target
+
         # will serve as pseudo labels storage later
         self.predictions = None
 
-        # creating spectograms and preparing labels
+        # creating spectrograms and preparing labels
         results_with_index = self._parallel_prepare(meta_df)
 
-        # extract spectograms and labels
+        # extract spectrograms and labels
         self.spectrs, self.labels, self.idx = zip(*results_with_index)
 
         if not group_mode:
-            # few row down we do item assignment
             self.labels = list(self.labels)
 
             # expand labels with respect to token_num in each sample
@@ -77,7 +88,7 @@ class BirdDataset(torch.utils.data.Dataset):
                 expand_size = tokenized_tensor.shape[-1]
                 self.labels[i] = np.tile(self.labels[i], (expand_size, 1))
 
-            # concatenate all tensor into 1 huge brick, because we doesn't care about their relations
+            # concatenate all tensor into 1 huge brick, because we don't care about their relations
             self.spectrs = torch.cat(self.spectrs, dim=-1)
             self.labels = [arr for sublist in self.labels for arr in sublist]
 
@@ -170,7 +181,7 @@ class BirdDataset(torch.utils.data.Dataset):
         """
         if self.group_mode:
             # it is the only option to fix dataloader select random samples via list problem
-            # we can't select tuple[list], so instead we have to itterate
+            # we can't select tuple[list], so instead we have to iterate
             # yes, it's the ONLY PLACE, we can't even use collate_fn
             if isinstance(index, list) or isinstance(index, np.ndarray):
                 batch_tensor = [self.spectrs[i] for i in index]
@@ -211,18 +222,14 @@ class OnlineDataset(torch.utils.data.Dataset):
             multitarget: bool = True,
     ):
         super().__init__()
-        self.cfg = config
         # sklearn labelencoder
         self.label_encoder = label_encoder
-        # files root dir
+
+        self.cfg = config
         self.root_dir = root_dir
-        # flag to retrieve whole sequnces instead of just tokens
         self.group_mode = group_mode
-        # flag to retrieve filenames to sequence of tensors
         self.return_id = return_id
-        # includes the secondary labels as primary
         self.multitarget = multitarget
-        # flag to retrive pseudo labels
         self.prediction_as_target = prediction_as_target
 
         # df that contains info about each file

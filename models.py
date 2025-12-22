@@ -6,113 +6,6 @@ import numpy as np
 #todo import MLA
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class Encoder(nn.Module):
-    def __init__(self, backbone_name: str, original_weights: bool = True):
-        super().__init__()
-        self.backbone = timm.create_model(
-            backbone_name,
-            pretrained=original_weights,
-            num_classes=0,
-        )
-        # init data-transform functions
-        self.stft_transform = None
-        self.db_transform = None
-        self.mel_transform = None
-        self.pooler = None
-
-    def set_audiopreprocessing(self, cfg):
-        self.stft_transform = transforms.Spectrogram(
-            n_fft=cfg.n_fft,
-            hop_length=cfg.hop_length,
-            power=1.0,
-        )
-        self.db_transform = transforms.AmplitudeToDB(
-            stype="magnitude",
-            top_db=cfg.top_db
-        )
-        self.mel_transform = transforms.MelScale(
-            sample_rate=cfg.sr,
-            n_stft=cfg.n_fft // 2 + 1,
-            n_mels=cfg.n_mels,
-        )
-        self.pooler = nn.AdaptiveMaxPool1d(cfg.n_mels)
-
-    def stripe_w_overlap(
-            self,
-            ar: torch.Tensor,
-            stripe: int,
-            overlap: int,
-            pad_value: float,
-    ):
-        """
-        splits tensor into overlaping chunks along time dim
-        the last token is dropped
-        if the time < token_width => pad with constant value of pad_value
-        returns (B(depends on input), C, H, W, tokens)
-        """
-        step = stripe - overlap
-        time_len = ar.shape[-1]  # time
-
-        # if time < stripe => pad with zeros, because we can't stack None values
-        if time_len < stripe:
-            ar = torch.nn.functional.pad(
-                input=ar,
-                pad=(0, stripe - time_len),
-                mode='constant',
-                value=pad_value
-
-            )
-            num_steps = 1
-        # if time < stripe+step means that there is possible only 1 step
-        elif time_len < stripe + step:
-            num_steps = 1
-        # number of full chunks
-        else:
-            num_steps = (time_len - stripe) // step
-
-        try:
-            striped_tensor = torch.stack(
-                [
-                    ar[:, ..., i * step: i * step + stripe]
-                    for i in range(num_steps)
-                ]
-            )  # (T, ...)
-        except:
-            raise RuntimeError(
-                f"error in stripes. here is the tensor shape: {ar.shape} ; the stripe: {stripe} ; and overlap: {overlap} ; and steps: {num_steps} ")
-
-        striped_tensor = torch.moveaxis(striped_tensor, 0, -1).contiguous()  # (T, ...) -> (..., T)
-
-        return striped_tensor
-
-    def forward(self, x, **kwargs):
-        # (B*T, C, H, W) -> (B*T, C_backbone)
-
-        # ==prerpcoessing raw waves into images
-        # (B*T, C, H, W) -> (B, C_spects, C_mel, W_stft)
-
-        stft = self.stft_transform(x)
-        stft = stft[..., :320]  # todo idk why, but I started to receive 321 windows after moving striping on raw waves
-        # conver to dB spectrs
-        mel_out_stft = self.db_transform(self.mel_transform(stft))
-        mel_out_stft_2 = self.db_transform(self.mel_transform(stft ** 2))
-        stft = self.db_transform(stft)
-
-        # normalize stft to mel size
-        mega_B, H, W, C_stft, W_stft = stft.shape
-        stft = torch.transpose(stft, -1, -2)  # mega_B, H, W, C_stft, W_stft -> mega_B, H, W, W_stft, C_stft
-
-        # flatten B, H, W, T into a single *B* dimension
-        stft = stft.reshape(-1, 1, C_stft)  # (B,H,W,W_s,C) -> (*B*, 1, C)
-        pooled_lin = self.pooler(stft)  # (*B*, 1, C_stft) -> (*B*, 1, C_mel)
-        pooled_lin = pooled_lin.reshape(mega_B, H, W, W_stft, -1)  # (mega_B, H, W, W_stft, C_mel)
-
-        x = torch.stack((mel_out_stft, mel_out_stft_2, pooled_lin), dim=1)  # B, C_spects, H, W, C_mel, W_stft
-        x = x.squeeze(2).squeeze(2)  # B, C_spects, C_mel, W_stft
-        # ==prerpcoessing raw waves into images
-
-        return self.backbone(x)  # (B*T, C, H, W) -> (B*T, C)
-
 class ETransformerBlock(nn.Module):
     def __init__(
         self,
@@ -239,6 +132,114 @@ class TokenEncoder(nn.Module):
 
         return output
 
+class Encoder(nn.Module):
+    def __init__(self, backbone_name: str, original_weights: bool = True):
+        super().__init__()
+        self.backbone = timm.create_model(
+            backbone_name,
+            pretrained=original_weights,
+            num_classes=0,
+        )
+        # init data-transform functions
+        self.stft_transform = None
+        self.db_transform = None
+        self.mel_transform = None
+        self.pooler = None
+
+    def set_audiopreprocessing(self, cfg):
+        self.stft_transform = transforms.Spectrogram(
+            n_fft=cfg.n_fft,
+            hop_length=cfg.hop_length,
+            power=1.0,
+        )
+        self.db_transform = transforms.AmplitudeToDB(
+            stype="magnitude",
+            top_db=cfg.top_db
+        )
+        self.mel_transform = transforms.MelScale(
+            sample_rate=cfg.sr,
+            n_stft=cfg.n_fft // 2 + 1,
+            n_mels=cfg.n_mels,
+        )
+        self.pooler = nn.AdaptiveMaxPool1d(cfg.n_mels)
+
+    def stripe_w_overlap(
+            self,
+            ar: torch.Tensor,
+            stripe: int,
+            overlap: int,
+            pad_value: float,
+    ):
+        """
+        splits tensor into overlapping chunks along time dim
+        the last token is dropped
+        if the time < token_width => pad with constant value of pad_value
+        returns (B(depends on input), C, H, W, tokens)
+        """
+        step = stripe - overlap
+        time_len = ar.shape[-1]  # time
+
+        # if time < stripe => pad with zeros, because we can't stack None values
+        if time_len < stripe:
+            ar = torch.nn.functional.pad(
+                input=ar,
+                pad=(0, stripe - time_len),
+                mode='constant',
+                value=pad_value
+
+            )
+            num_steps = 1
+        # if time < stripe+step means that there is possible only 1 step
+        elif time_len < stripe + step:
+            num_steps = 1
+        # number of full chunks
+        else:
+            num_steps = (time_len - stripe) // step
+
+        try:
+            striped_tensor = torch.stack(
+                [
+                    ar[:, ..., i * step: i * step + stripe]
+                    for i in range(num_steps)
+                ]
+            )  # (T, ...)
+        except:
+            raise RuntimeError(
+                f"error in stripes. here is the tensor shape: {ar.shape} ; the stripe: {stripe} ; and overlap: {overlap} ; and steps: {num_steps} ")
+
+        striped_tensor = torch.moveaxis(striped_tensor, 0, -1).contiguous()  # (T, ...) -> (..., T)
+
+        return striped_tensor
+
+    def forward(self, x, **kwargs):
+        # (B*T, C, H, W) -> (B*T, C_backbone)
+
+        # ==prerpcoessing raw waves into images
+        # (B*T, C, H, W) -> (B, C_spects, C_mel, W_stft)
+
+        stft = self.stft_transform(x)
+        stft = stft[..., :320]  # todo idk why, but I started to receive 321 windows after moving striping on raw waves
+        # conver to dB spectrs
+        mel_out_stft = self.db_transform(self.mel_transform(stft))
+        mel_out_stft_2 = self.db_transform(self.mel_transform(stft ** 2))
+        stft = self.db_transform(stft)
+
+        # normalize stft to mel size
+        mega_B, H, W, C_stft, W_stft = stft.shape
+        stft = torch.transpose(stft, -1, -2)  # mega_B, H, W, C_stft, W_stft -> mega_B, H, W, W_stft, C_stft
+
+        # flatten B, H, W, T into a single *B* dimension
+        stft = stft.reshape(-1, 1, C_stft)  # (B,H,W,W_s,C) -> (*B*, 1, C)
+        pooled_lin = self.pooler(stft)  # (*B*, 1, C_stft) -> (*B*, 1, C_mel)
+        pooled_lin = pooled_lin.reshape(mega_B, H, W, W_stft, -1)  # (mega_B, H, W, W_stft, C_mel)
+
+        x = torch.stack((mel_out_stft, mel_out_stft_2, pooled_lin), dim=1)  # B, C_spects, H, W, C_mel, W_stft
+        x = x.squeeze(2).squeeze(2)  # B, C_spects, C_mel, W_stft
+        # ==prerpcoessing raw waves into images
+
+        return self.backbone(x)  # (B*T, C, H, W) -> (B*T, C)
+
+
 class Classifier(nn.Module):
     def __init__(
             self,
@@ -277,7 +278,7 @@ class Classifier(nn.Module):
             x: features from vision encoder.
             multitarget_mask: list of booleans, where True means to use multitarget model.
             return_NoF: whether to return NoF token.
-            pool: wheter to return output sequence wise or token wise.
+            pool: whether to return output sequence wise or token wise.
         """
 
         # B, T_max, Channels -> B, empty/T_max, Class_digit+NoF
@@ -372,7 +373,7 @@ class CLEFModel(nn.Module):
         Pass list of sequences into vision encoder and classifier models.
 
         seq-wise:
-        Unioun list of tensor into huge one, to pass it through encoder,
+        Union list of tensor into huge one, to pass it through encoder,
         The received features are padded, to create once again 1 huge tensor for classifier
         """
         # list -> predict seq-wise
@@ -383,7 +384,7 @@ class CLEFModel(nn.Module):
             try:
                 x_feature_tensor = self.encoder(x_feature_tensor)  # (T*B, C)
             except:
-                raise ValueError(f"Most likely cuda memmory allocation, tensor shape: {x_feature_tensor.shape}")
+                raise ValueError(f"Most likely cuda memory allocation, tensor shape: {x_feature_tensor.shape}")
 
             # split back into seqs
             prev_len = 0
@@ -393,7 +394,7 @@ class CLEFModel(nn.Module):
                 embed.append(x_feature_tensor[prev_len: prev_len + cur_len])  # (T_b, C)
                 prev_len = prev_len + cur_len
 
-            # pad sequnces
+            # pad sequences
             embed, attention_mask = self.pad_list_to_tensor(embed)
         else:
             embed = self.encoder(x.to(device))
