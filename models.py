@@ -3,7 +3,8 @@ import torch
 import timm
 import torchaudio.transforms as transforms
 import numpy as np
-#todo import MLA
+
+from deepseek_mla.src import MultiHeadLatentAttention #proper installation
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class ETransformerBlock(nn.Module):
