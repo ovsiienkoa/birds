@@ -4,6 +4,7 @@ from sklearn.metrics import roc_auc_score
 import torch
 import wandb
 import numpy as np
+import pandas as pd
 
 from datasets import IndexBatchSampler
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
