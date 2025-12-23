@@ -5,6 +5,7 @@ import torch
 import wandb
 import numpy as np
 
+from datasets import IndexBatchSampler
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class CustomTrainer:
@@ -44,7 +45,7 @@ class CustomTrainer:
             )
         else:
             dataloader = DataLoader(
-                train_ds,
+                dataset,
                 batch_size=self.batch_size,
                 shuffle=shuffle
             )
